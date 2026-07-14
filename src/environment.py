@@ -84,3 +84,119 @@ def spawn_initial_vehicles(world, waypoint_locations, num_agents=2, frame_w=800,
             raise RuntimeError(f"Errore critico: Impossibile spawnare il veicolo {i} nella posizione indicata.")
 
     return vehicles
+
+def setup_collision_sensors(world, vehicles):
+    """
+    Configura e aggancia un sensore di collisione a ciascun veicolo.
+    Ritorna la lista dei sensori creati e una lista condivisa per tracciare lo stato delle collisioni.
+    """
+    collision_types = [None] * len(vehicles)
+    collision_sensors = []
+    blueprint_library = world.get_blueprint_library()
+    collision_bp = blueprint_library.find('sensor.other.collision')
+
+    for i, vehicle in enumerate(vehicles):
+        sensor = world.spawn_actor(
+            collision_bp,
+            carla.Transform(),
+            attach_to=vehicle
+        )
+
+        def make_callback(index):
+            def callback(event):
+                other_actor = event.other_actor
+                if other_actor and "vehicle" in other_actor.type_id:
+                    collision_types[index] = "car_collision"
+                else:
+                    collision_types[index] = "wall_collision"
+            return callback
+
+        sensor.listen(make_callback(i))
+        collision_sensors.append(sensor)
+
+    return collision_sensors, collision_types
+
+def get_state(vehicle, world):
+    """Calcola lo stato dell'agente includendo i 16 raycast + la velocità e l'allineamento pista normalizzati."""
+    transform = vehicle.get_transform()
+    location = transform.location
+    yaw = math.radians(transform.rotation.yaw)
+
+    start = carla.Location(
+        x=location.x,
+        y=location.y,
+        z=location.z + 1.0
+    )
+
+    bbox = vehicle.bounding_box
+    extent_x = bbox.extent.x
+    extent_y = bbox.extent.y
+
+    ray_distances = []
+
+    for angle, ray_length in zip(ANGLES, RAY_LENGTHS):
+        angle_rad = math.radians(angle)
+        offset = math.sqrt(
+            (extent_x * math.cos(angle_rad))**2 +
+            (extent_y * math.sin(angle_rad))**2
+        )
+        ray_yaw = yaw + angle_rad
+
+        end = carla.Location(
+            x=start.x + ray_length * math.cos(ray_yaw),
+            y=start.y + ray_length * math.sin(ray_yaw),
+            z=start.z
+        )
+
+        hits = world.cast_ray(start, end)
+        distance = ray_length
+        hits_sorted = sorted(hits, key=lambda h: start.distance(h.location))
+
+        for hit in hits_sorted:
+            d = start.distance(hit.location)
+            if d > (offset + 0.1):
+                distance = d
+                break
+
+        distance_corrected = max(0.0, distance - offset)
+        normalized = distance_corrected / ray_length
+        ray_distances.append(normalized)
+
+    # Calcolo Velocità
+    velocity = vehicle.get_velocity()
+    speed = math.sqrt(velocity.x**2 + velocity.y**2 + velocity.z**2)
+    speed_norm = np.clip(speed / MAX_VELOCITY, 0.0, 1.0)
+
+    # Angolo relativo rispetto ai waypoint della pista
+    wp = waypoint_locations[:, :2]
+    distances = np.linalg.norm(
+        wp - np.array([location.x, location.y]),
+        axis=1
+    )
+    closest_idx = np.argmin(distances)
+
+    # Recuperiamo la direzione in cui guarda l'auto
+    v_forward = transform.get_forward_vector()
+    # Recuperiamo la direzione reale della pista usando il tracciato dei waypoint
+    next_idx = (closest_idx + 1) % len(waypoint_locations)
+    wp_now = waypoint_locations[closest_idx]
+    wp_next = waypoint_locations[next_idx]
+    # Vettore direzione pista
+    track_dir_x = wp_next[0] - wp_now[0]
+    track_dir_y = wp_next[1] - wp_now[1]
+    # Calcoliamo l'angolo relativo tra l'auto e la pista
+    angle_vehicle = math.atan2(v_forward.y, v_forward.x)
+    angle_track = math.atan2(track_dir_y, track_dir_x)
+    
+    angle_to_track = angle_track - angle_vehicle
+    # Normalizziamo tra -pi e +pi
+    angle_to_track = (angle_to_track + math.pi) % (2 * math.pi) - math.pi
+    angle_norm = angle_to_track / math.pi
+
+    state = np.concatenate([
+        ray_distances,
+        [speed_norm],
+        [angle_norm]
+    ])
+
+    return state

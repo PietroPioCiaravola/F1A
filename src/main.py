@@ -33,7 +33,7 @@ print("🚀 SCRIPT AVVIATO CON SUCCESSO CON PYTHON 3.7!")
 
 from config.config import NUM_AGENTS
 from src.connection import connect_to_carla
-from src.environment import waypoint_locations, spawn_initial_vehicles
+from src.environment import waypoint_locations, spawn_initial_vehicles, setup_collision_sensors, get_state
 
 def main():
     # 1. Connessione al simulatore
@@ -46,6 +46,9 @@ def main():
         waypoint_locations=waypoint_locations,
         num_agents=NUM_AGENTS
     )
+
+    # 3. Setup dei sensori di collisione agganciati alle vetture
+    collision_sensors, collision_types = setup_collision_sensors(world, vehicles)
 
     try:
         while True:
@@ -60,6 +63,16 @@ def main():
             world.apply_settings(settings)
         except:
             pass
+
+        # 2. Distruggiamo i sensori
+        for sensor in collision_sensors:
+            try: sensor.destroy()
+            except: pass
+
+        # 3. Distruggiamo i veicoli
+        for vehicle in vehicles:
+            try: vehicle.destroy()
+            except: pass
 
         print("🧹 Pulizia completata. Script terminato in sicurezza.")
 
