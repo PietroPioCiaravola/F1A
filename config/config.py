@@ -32,3 +32,8 @@ RAY_LENGTHS = [
     20, 20,                # ±135°
     15                     # 180°
 ]
+
+# Dimensioni delle reti neurali
+STATE_DIM = 18          # 16 raggi + velocità norm + angolo norm
+ACTION_DIM = 2          # Sterzo, Acceleratore/Freno
+GLOBAL_STATE_DIM = STATE_DIM * NUM_AGENTS  # Stato globale per il Critic centralizzato

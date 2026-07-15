@@ -2,6 +2,29 @@
 
 Progetto per l'esame di **Fondamenti di Intelligenza Artificiale** (3° Anno - 1° Semestre). Il codice implementa la connessione al simulatore CARLA e la gestione del tracciato di Monza utilizzando una struttura a pacchetti modulare.
 
+# 🧠 Modello RL: Multi-Agent Proximal Policy Optimization (MAPPO)
+
+Il sistema adotta un approccio Centralized Training with Decentralized Execution (CTDE), ideale per la gestione di scenari competitivi e cooperativi di guida autonoma:
+
+### 1. Actor (Decentralizzato - `src/models.py`)
+
+Ogni veicolo agisce come un agente autonomo guidato da una rete neurale locale:
+
+- **Input (Stato Locale - $18$ dimensioni)**:
+  - 16 letture raycast normalizzate per il rilevamento dinamico degli ostacoli e dei limiti fisici del tracciato (con una portata differenziata da 15m a 65m).
+  - Velocità lineare dell'auto normalizzata rispetto al limite di riferimento di $v_{max} = 40.0\text{ m/s}$.
+  - Angolo di deviazione relativo (normalizzato nell'intervallo $[-1.0, 1.0]$) rispetto alla direzione tangente del waypoint della pista.
+- **Output (Spazio delle Azioni - $2$ dimensioni):**
+  - Controllo continuo dello sterzo (intervallo $[-1.0, 1.0]$).
+  - Controllo continuo della trazione (acceleratore/freno integrato nell'intervallo $[-1.0, 1.0]$).
+
+### 2. Critic (Centralizzato - `src/models.py`)
+
+Utilizzato esclusivamente durante la fase off-line di apprendimento per mitigare i problemi di non-stazionarietà dell'ambiente multi-agente:
+
+- **Input (Stato Globale - $36$ dimensioni):** Concatena gli stati locali di tutti gli agenti attivi nella simulazione (18 input $\times$ 2 veicoli).
+- **Output (Valore dello Stato):** Stima del valore dello stato globale per il calcolo del vantaggio temporale ($GAE$) di ciascun agente.
+
 ## 🛠️ Requisiti di Sistema e Prerequisiti
 
 Per garantire la compatibilità con l'API di CARLA 0.9.12 (fornita tramite file `.egg`), il progetto richiede tassativamente:
@@ -16,16 +39,17 @@ Per garantire la compatibilità con l'API di CARLA 0.9.12 (fornita tramite file 
 ```text
 F1A/
 ├── config/
-│   └── config.py          # Parametri di configurazione (porte, indici, tracciato)
+│   └── config.py          # Costanti di sistema, configurazione sensori e iperparametri
 ├── src/
 │   ├── __init__.py
-│   ├── connection.py      # Gestione connessione client-server RPC con CARLA
-│   ├── environment.py     # Caricamento waypoint e gestione dell'ambiente di gara
-│   └── main.py            # Entry point dell'applicazione
+│   ├── connection.py      # Gestione della connessione sincrona con il server CARLA
+│   ├── environment.py     # Gestione fisica dell'ambiente, spawning e raycasting geometrico
+│   ├── main.py              # Entry-point per l'avvio e la gestione del ciclo di simulazione
+│   └── models.py          # Classi PyTorch per le reti neurali Actor-Critic
 ├── .gitignore
-├── Monza.npz              # File contenente le coordinate dei waypoint del tracciato
+├── Monza.npz              # Dataset geometrico dei waypoint del circuito
 ├── README.md
-└── requirements.txt
+└── requirements.txt       # Pacchetti necessari per il progetto
 ```
 
 ## 🚀 Installazione e Configurazione

@@ -1,1 +1,6 @@
+# Indice ufficiale PyTorch per scaricare la versione con accelerazione CUDA 11.8
+--find-links https://download.pytorch.org/whl/cu118
+
+# Librerie principali di calcolo e Deep Learning
 numpy==1.26.4
+torch
