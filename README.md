@@ -42,6 +42,7 @@ F1A/
 │   └── config.py          # Costanti di sistema, configurazione sensori e iperparametri
 ├── src/
 │   ├── __init__.py
+│   ├── buffer.py          # Accumulo delle transazioni locali e globali per l'addestramento
 │   ├── connection.py      # Gestione della connessione sincrona con il server CARLA
 │   ├── environment.py     # Gestione fisica dell'ambiente, spawning e raycasting geometrico
 │   ├── main.py            # Entry-point per l'avvio e la gestione del ciclo di simulazione
