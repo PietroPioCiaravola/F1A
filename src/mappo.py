@@ -45,11 +45,14 @@ class MAPPO:
         gae = torch.zeros(num_agents, device=device)
 
         with torch.no_grad():
+            # Converte dones in un tensore float sul device corretto una volta sola prima del ciclo
+            dones_device = dones.float().to(device)
+
             for t in reversed(range(T)):
                 # Flag non_terminal: 0.0 se l'episodio è finito (done=True), 1.0 altrimenti
-                non_terminal = 1.0 - float(dones[t].item()) if hasattr(dones[t], 'item') else 1.0 - float(dones[t])
+                non_terminal = 1.0 - dones_device[t] # Operazione nativa tra tensori dello stesso device
                 val_next = values_extended[t+1]
-                
+
                 # Delta di Bellman con protezione crash
                 delta = rewards[t] + self.gamma * val_next * non_terminal - values_extended[t]
                 gae = delta + self.gamma * self.lmbda * gae * non_terminal

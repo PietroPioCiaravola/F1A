@@ -41,3 +41,10 @@ class RolloutBuffer:
         values_t = torch.tensor(np.array(self.values), dtype=torch.float32, device=device)
 
         return states_t, global_states_t, actions_t, log_probs_t, rewards_t, dones_t, values_t
+
+    def __len__(self):
+        """
+        Metodo speciale (Dunder Method) per mappare la funzione integrata len().
+        Garantisce la sincronizzazione automatica quando il buffer viene resettato.
+        """
+        return len(self.states)

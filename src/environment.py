@@ -201,3 +201,130 @@ def get_state(vehicle, world):
     ])
 
     return state
+
+def reset_environment(world, vehicles, collision_sensors, blueprint_library):
+    """
+    Esegue il reset completo dell'ambiente: pulizia, spawning randomizzato dei veicoli sulla linea di partenza (swap 50%)
+    e stabilizzazione fisica a terra.
+    La funzione allo stato attuale gestisce lo spawn di due veicoli affiancati sulla linea di partenza.
+    """
+    # 1. Distruggi veicoli in sicurezza
+    for v in vehicles:
+        try:
+            v.destroy()
+        except:
+            pass
+    vehicles.clear()
+
+    # 2. Distruggi sensori in sicurezza
+    for s in collision_sensors:
+        try:
+            s.destroy()
+        except:
+            pass
+    collision_sensors.clear()
+
+    # Forza CARLA a elaborare la distruzione prima di spawnare i nuovi attori
+    world.tick()
+
+    # 3. Reset stati locali delle collisioni
+    collision_types = [None] * NUM_AGENTS
+
+    # 4. Calcoli geometrici per il respawn affiancato sul traguardo
+    wp_zero = waypoint_locations[0]
+    wp_one = waypoint_locations[1]
+
+    yaw_rad = math.atan2(wp_one[1] - wp_zero[1], wp_one[0] - wp_zero[0])
+    yaw_deg = math.degrees(yaw_rad)
+    rotation_auto = carla.Rotation(pitch=0.0, roll=0.0, yaw=yaw_deg)
+
+    right_vector = carla.Vector3D(
+        x=-math.sin(yaw_rad),
+        y=math.cos(yaw_rad),
+        z=0
+    )
+
+    # 🎯 TESTA O CROCE: 50% di probabilità di invertire i lati degli agenti
+    swap_sides = np.random.rand() > 0.5
+    VEHICLE_WIDTH = 2.0
+    LATERAL_MARGIN = 1.2
+
+    for i in range(NUM_AGENTS):
+        # Calcoliamo la distanza standard dal centro della pista
+        offset = VEHICLE_WIDTH / 2 + LATERAL_MARGIN
+
+        # Se swap_sides è True, invertiamo la posizione dei veicoli
+        if swap_sides:
+            lateral = -offset if i % 2 == 0 else offset
+        else:
+            lateral = offset if i % 2 == 0 else -offset
+
+        spawn_transform = carla.Transform(
+            carla.Location(
+                x=wp_zero[0] + right_vector.x * lateral,
+                y=wp_zero[1] + right_vector.y * lateral,
+                z=wp_zero[2] + 0.1
+            ),
+            rotation_auto
+        )
+
+        # Spawn del veicolo con colore differente per distinguere i due agenti
+        bp_locale = blueprint_library.filter('vehicle.tesla.model3')[0]
+        if i == 0:
+            bp_locale.set_attribute('color', '255,0,0')    # Rosso Corsa
+        else:
+            bp_locale.set_attribute('color', '0,242,255')  # Turchese/Cyan
+
+        vehicle = world.try_spawn_actor(bp_locale, spawn_transform)
+        if vehicle:
+            vehicles.append(vehicle)
+
+    # 5. Ricrea sensori di collisione
+    collision_bp = blueprint_library.find('sensor.other.collision')
+    for i, vehicle in enumerate(vehicles):
+        sensor = world.spawn_actor(
+            collision_bp,
+            carla.Transform(),
+            attach_to=vehicle
+        )
+
+        def make_callback(index):
+            def callback(event):
+                other_actor = event.other_actor
+                if other_actor and "vehicle" in other_actor.type_id:
+                    collision_types[index] = "car_collision"
+                else:
+                    collision_types[index] = "wall_collision"
+            return callback
+
+        sensor.listen(make_callback(i))
+        collision_sensors.append(sensor)
+
+    # 6. Stabilizzazione Fisica (Tiriamo il freno a mano per far cadere l'auto a terra)
+    for vehicle in vehicles:
+        vehicle.apply_control(carla.VehicleControl(steer=0.0, throttle=0.0, brake=1.0, hand_brake=True))
+    
+    # Facciamo avanzare il simulatore a vuoto senza registrare traiettorie
+    TICKS_TO_STABILIZE = 15  # 15 tick * 0.05s = 0.75 secondi di stabilizzazione fisica a terra
+    for _ in range(TICKS_TO_STABILIZE):
+        world.tick()
+    
+    # Rilasciamo i freni per iniziare l'episodio
+    for vehicle in vehicles:
+        controllo_pulito = carla.VehicleControl(
+            hand_brake=False, 
+            brake=0.0, 
+            throttle=0.0, 
+            steer=0.0,
+            manual_gear_shift=False # Forza il cambio automatico di CARLA a inserire la "Drive"
+        )
+        vehicle.apply_control(controllo_pulito)
+    
+    # Facciamo un singolo tick a vuoto per applicare lo sblocco prima di ridare il controllo all'IA
+    world.tick()
+
+    # Svuota le collisioni registrate accidentalmente durante la caduta iniziale
+    for index in range(NUM_AGENTS):
+        collision_types[index] = None
+
+    return vehicles, collision_sensors, collision_types

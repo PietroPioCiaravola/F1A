@@ -39,6 +39,15 @@ STATE_DIM = 18          # 16 raggi + velocità norm + angolo norm
 ACTION_DIM = 2          # Sterzo, Acceleratore/Freno
 GLOBAL_STATE_DIM = STATE_DIM * NUM_AGENTS  # Stato globale per il Critic centralizzato
 
+# Iperparametri MAPPO
+ROLLOUT_STEPS = 128     # Quanti step accumulare nel buffer prima di aggiornare le reti
+LR_ACTOR = 3e-4         # Learning rate dell'Actor
+LR_CRITIC = 1e-3        # Learning rate del Critic
+GAMMA = 0.99            # Fattore di sconto temporale
+LAMBDA = 0.95           # Parametro GAE (Generalized Advantage Estimation)
+CLIP_EPS = 0.2          # Parametro di clipping per PPO
+K_EPOCHS = 1            # Numero di epoche di ottimizzazione per aggiornamento
+
 # Pesi Reward
 W_PROGRESS = 250.0 # Peso del progresso lungo la pista
 W_SPEED = 0.5 # Peso della velocità
