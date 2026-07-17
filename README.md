@@ -45,6 +45,7 @@ F1A/
 │   ├── buffer.py          # Accumulo delle transazioni locali e globali per l'addestramento
 │   ├── connection.py      # Gestione della connessione sincrona con il server CARLA
 │   ├── environment.py     # Gestione fisica dell'ambiente, spawning e raycasting geometrico
+│   ├── logger.py          # Salvataggio e monitoraggio delle metriche di addestramento su CSV
 │   ├── main.py            # Entry-point per l'avvio e la gestione del ciclo di simulazione
 │   ├── models.py          # Classi PyTorch per le reti neurali Actor-Critic
 │   ├── mappo.py           # Algoritmo MAPPO, calcolo del GAE e ottimizzazione reti

@@ -8,6 +8,7 @@ from src.reward import RewardFunction
 waypoint_locations = None
 TOTAL_WAYPOINTS = 0
 TRACK_LENGTH_METERS = 0.0
+track_distances_cumulative = None
 
 src_dir = os.path.dirname(os.path.abspath(__file__))
 f1a_root_dir = os.path.dirname(src_dir)
@@ -28,6 +29,11 @@ if os.path.exists(absolute_waypoint_path):
     wp_xy = waypoint_locations[:, :2]
     segment_distances = np.linalg.norm(wp_xy - np.roll(wp_xy, -1, axis=0), axis=1)
     TRACK_LENGTH_METERS = np.sum(segment_distances)
+
+    # Calcolo delle distanze cumulative lungo l'asfalto per ogni waypoint (utile per il calcolo del progresso)
+    track_distances_cumulative = np.zeros(TOTAL_WAYPOINTS)
+    for idx in range(1, TOTAL_WAYPOINTS):
+        track_distances_cumulative[idx] = track_distances_cumulative[idx-1] + segment_distances[idx-1]
 
     print(f"🗺️ Waypoint di Monza caricati correttamente! ({TOTAL_WAYPOINTS} punti trovati, Lunghezza: {TRACK_LENGTH_METERS:.2f}m)")
 else:

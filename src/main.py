@@ -36,11 +36,12 @@ print("🚀 SCRIPT AVVIATO CON SUCCESSO CON PYTHON 3.7!")
 import carla
 from config.config import NUM_AGENTS, STATE_DIM, GLOBAL_STATE_DIM, ACTION_DIM, MAX_VELOCITY, ROLLOUT_STEPS, LR_ACTOR, LR_CRITIC, GAMMA, LAMBDA, CLIP_EPS, K_EPOCHS
 from src.connection import connect_to_carla
-from src.environment import waypoint_locations, spawn_initial_vehicles, setup_collision_sensors, get_state, reset_environment, TOTAL_WAYPOINTS, TRACK_LENGTH_METERS
+from src.environment import waypoint_locations, spawn_initial_vehicles, setup_collision_sensors, get_state, reset_environment, TOTAL_WAYPOINTS, TRACK_LENGTH_METERS, track_distances_cumulative
 from src.models import Actor, Critic
 from src.buffer import RolloutBuffer
 from src.mappo import MAPPO
 from src.reward import RewardFunction
+from src.logger import TrainingLogger
 
 def main():
     # 1. Connessione al simulatore CARLA
@@ -69,6 +70,15 @@ def main():
     # 3. Istanza delle reti Actor-Critic e dell'algoritmo MAPPO
     actor_net = Actor(state_dim=STATE_DIM, action_dim=ACTION_DIM).to(device)
     critic_net = Critic(global_state_dim=GLOBAL_STATE_DIM, num_agents=NUM_AGENTS).to(device)
+
+    # Caricamento dei pesi pregressi se presenti
+    if os.path.exists("actor.pth"):
+        actor_net.load_state_dict(torch.load("actor.pth", map_location=device))
+        print("✅ Pesi Actor caricati con successo!")
+
+    if os.path.exists("critic.pth"):
+        critic_net.load_state_dict(torch.load("critic.pth", map_location=device))
+        print("✅ Pesi Critic caricati con successo!")
     
     mappo_agent = MAPPO(
         actor=actor_net,
@@ -92,6 +102,9 @@ def main():
     # Istanza della funzione di calcolo del reward
     reward_fn = RewardFunction()
 
+    # Istanza del Logger strutturato
+    logger = TrainingLogger()
+
     print(f"🏁 Avvio ciclo di addestramento MAPPO...")
 
     prev_closest_idx = [None] * NUM_AGENTS # Variabile per salvare l'ultimo indice di waypoint registrato per ciascun agente
@@ -99,6 +112,9 @@ def main():
     episode_id = 0 # ID dell'episodio
     episode_step = 0 # Contatore degli step all'interno dell'episodio corrente
     done_episode = False # Flag per indicare se l'episodio corrente è terminato (collisione o fine episodio)
+    reset_reason = "max_steps" # Di default assume max_steps (verrà sovrascritta in caso di collisione)
+    laps_completed = [0] * NUM_AGENTS # contatore dei giri completati per ogni agente
+    last_p_loss, last_v_loss = 0.0, 0.0 # Ultime perdite registrate per l'Actor e il Critic (per logging)
 
     try:
         # Recupero lo stato iniziale per tutti gli agenti dopo il reset di avvio
@@ -176,9 +192,11 @@ def main():
 
                     # Sfasamento traguardo: se il salto è drastico all'indietro, è un nuovo giro
                     if diff < -(TOTAL_WAYPOINTS // 2):
+                        laps_completed[i] += 1
                         diff += TOTAL_WAYPOINTS
                     # Se l'auto va al contrario per errore (marcia indietro drastica oltre il traguardo)
                     elif diff > (TOTAL_WAYPOINTS // 2):
+                        laps_completed[i] -= 1
                         diff -= TOTAL_WAYPOINTS
 
                     progress = diff / TOTAL_WAYPOINTS
@@ -187,6 +205,7 @@ def main():
 
                 collision = (collision_types[i] is not None)
                 if collision:
+                    reset_reason = collision_types[i] # Salva il tipo esatto di collisione (wall_collision o car_collision)
                     collision_types[i] = None
                     any_collision = True
 
@@ -212,6 +231,40 @@ def main():
             if any_collision:
                 done_episode = True
 
+            # Calcoli di telemetria per il Logger
+            loc_0 = vehicles[0].get_transform().location
+            loc_1 = vehicles[1].get_transform().location
+            real_physical_distance = np.sqrt((loc_0.x - loc_1.x)**2 + (loc_0.y - loc_1.y)**2)
+
+            # Chi è davanti?
+            idx_0 = prev_closest_idx[0] if prev_closest_idx[0] is not None else 0
+            idx_1 = prev_closest_idx[1] if prev_closest_idx[1] is not None else 0
+
+            meters_agent_0 = (laps_completed[0] * TRACK_LENGTH_METERS) + track_distances_cumulative[idx_0]
+            meters_agent_1 = (laps_completed[1] * TRACK_LENGTH_METERS) + track_distances_cumulative[idx_1]
+
+            # Calcolo della distanza tra gli agenti lungo l'asfalto
+            distance_between_agents = abs(meters_agent_0 - meters_agent_1)
+
+            # True se l'agente 0 è davanti all'agente 1
+            is_leading_0 = meters_agent_0 >= meters_agent_1
+
+            # Recupero velocità e angoli fisici denormalizzati
+            speed_0 = next_states[0][16] * MAX_VELOCITY
+            speed_1 = next_states[1][16] * MAX_VELOCITY
+            angle_0 = abs(next_states[0][17] * np.pi)
+            angle_1 = abs(next_states[1][17] * np.pi)
+
+            # Inviamo i dati allo step recorder
+            logger.record_step(
+                speeds=[speed_0, speed_1],
+                angles=[angle_0, angle_1],
+                distance_between_agents=distance_between_agents,
+                real_physical_distance=real_physical_distance,
+                is_leading_0=is_leading_0,
+                rewards=rewards.tolist()
+            )
+
             # 6. Salvataggio nel buffer
             buffer.store(
                 states=states,
@@ -232,10 +285,17 @@ def main():
             if done_episode:
                 print(f"🚨 Episodio finito. Step episodio: {episode_step}")
 
-                # Se abbiamo accumulato abbastanza dati totali, facciamo l'update
+                # Se abbiamo accumulato abbastanza dati totali, facciamo l'update e prendiamo i dati di perdita
                 if len(buffer) >= ROLLOUT_STEPS:
                     print(f"🎯 Rollout completo ({len(buffer)} step). Ottimizzazione MAPPO...")
-                    mappo_agent.update(buffer, global_state, device)
+                    last_p_loss, last_v_loss = mappo_agent.update(buffer, global_state, device)
+
+                # Salva i dati su CSV chiamando il logger
+                logger.log_episode_end(
+                    laps_completed=laps_completed,
+                    losses=(last_p_loss, last_v_loss),
+                    reason=reset_reason
+                )
 
                 episode_id += 1
 
@@ -257,15 +317,17 @@ def main():
                 episode_step = 0
                 done_episode = False
                 any_collision = False
+                reset_reason = "max_steps"
                 prev_steer_agents = [0.0] * NUM_AGENTS
                 prev_closest_idx = [None] * NUM_AGENTS
+                laps_completed = [0] * NUM_AGENTS
 
                 continue
 
             # Se l'episodio prosegue normalmente ma raggiungiamo la soglia di rollout
             if len(buffer) >= ROLLOUT_STEPS:
                 print(f"🎯 Rollout completo ({len(buffer)} step). Ottimizzazione MAPPO...")
-                mappo_agent.update(buffer, global_state, device)
+                last_p_loss, last_v_loss = mappo_agent.update(buffer, global_state, device)
 
     finally:
         # 1. Ripristiniamo la modalità asincrona per evitare che CARLA si congeli.
