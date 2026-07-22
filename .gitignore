@@ -5,3 +5,4 @@ __pycache__/
 Monza.npz
 *.pth
 training_log.csv
+pth-history/
