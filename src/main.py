@@ -34,7 +34,7 @@ if sys.version_info.major != 3 or sys.version_info.minor != 7:
 print("🚀 SCRIPT AVVIATO CON SUCCESSO CON PYTHON 3.7!")
 
 import carla
-from config.config import MAX_VELOCITY_KMH, NUM_AGENTS, STATE_DIM, GLOBAL_STATE_DIM, ACTION_DIM, MAX_VELOCITY, ROLLOUT_STEPS, LR_ACTOR, LR_CRITIC, GAMMA, LAMBDA, CLIP_EPS, K_EPOCHS, STILL_THRESHOLD_STEPS, MAX_STEPS_PER_EPISODE, COOLDOWN_OVERTAKE_STEPS, OVERTAKE_THRESHOLD_METERS
+from config.config import MAX_VELOCITY_KMH, NUM_AGENTS, STATE_DIM, GLOBAL_STATE_DIM, ACTION_DIM, MAX_VELOCITY, ROLLOUT_STEPS, LR_ACTOR, LR_CRITIC, GAMMA, LAMBDA, CLIP_EPS, K_EPOCHS, STILL_THRESHOLD_STEPS, MAX_STEPS_PER_EPISODE, COOLDOWN_OVERTAKE_STEPS, OVERTAKE_THRESHOLD_METERS, SAVE_INTERVAL_STEPS
 from src.connection import connect_to_carla
 from src.environment import waypoint_locations, spawn_initial_vehicles, setup_collision_sensors, get_state, reset_environment, TOTAL_WAYPOINTS, TRACK_LENGTH_METERS, track_distances_cumulative
 from src.models import Actor, Critic
@@ -120,11 +120,13 @@ def main():
 
     prev_closest_idx = [None] * NUM_AGENTS # Variabile per salvare l'ultimo indice di waypoint registrato per ciascun agente
     prev_steer_agents = [0.0] * NUM_AGENTS # Memoria dello sterzo precedente per calcolare la penalità dinamica dello sterzo
-    episode_id = 0 # ID dell'episodio
+    episode_id = logger.episode_id # ID dell'episodio
     episode_step = 0 # Contatore degli step all'interno dell'episodio corrente
     done_episode = False # Flag per indicare se l'episodio corrente è terminato (collisione o fine episodio)
     reset_reason = "max_steps" # Di default assume max_steps (verrà sovrascritta in caso di collisione)
     laps_completed = [0] * NUM_AGENTS # contatore dei giri completati per ogni agente
+    lap_start_steps = [0] * NUM_AGENTS # Memoria dello step in cui è iniziato l'ultimo giro per ciascun agente
+    episode_cumulative_rewards = [0.0, 0.0] # Accumulatore di reward per ciascun agente durante l'episodio
     last_p_loss, last_v_loss = float('nan'), float('nan') # Ultime perdite registrate per l'Actor e il Critic (per logging)
     episode_p_losses = [] # Accumulatore per calcolare la media delle loss per l'Actor sull'intero episodio (per logging)
     episode_v_losses = [] # Accumulatore per calcolare la media delle loss per il Critic sull'intero episodio (per logging)
@@ -143,6 +145,9 @@ def main():
         overtakes_0 = 0
         overtakes_1 = 0
         steps_leading_0 = 0
+
+        # Calcolo dell'ultimo checkpoint salvato per evitare di sovrascrivere i progressi in caso di crash o interruzione
+        last_saved_checkpoint = (logger.global_step // SAVE_INTERVAL_STEPS) * SAVE_INTERVAL_STEPS
 
         while True:
             # 1. Inferenza della Policy
@@ -204,6 +209,8 @@ def main():
             locations = [t.location for t in transforms]
             rotations = [t.rotation for t in transforms]
 
+            MIN_VALID_LAP_TIME_S = 40.0
+
             # 5. Progresso e giri completati per ciascun agente
             for i, vehicle in enumerate(vehicles):
                 # Calcolo geometrico del progresso basato sulle nuove coordinate del veicolo
@@ -221,6 +228,16 @@ def main():
                     if diff < -(TOTAL_WAYPOINTS // 2):
                         laps_completed[i] += 1
                         diff += TOTAL_WAYPOINTS
+
+                        # Calcolo e tracciamento Best Lap Time
+                        lap_steps = episode_step - lap_start_steps[i]
+                        lap_time_s = lap_steps * 0.05 # 20 FPS -> 0.05s per step
+                        if laps_completed[i] > 0 and lap_time_s >= MIN_VALID_LAP_TIME_S:
+                            logger.update_lap_time(i, lap_time_s)
+
+                        # Resetta il cronometro per il nuovo giro
+                        lap_start_steps[i] = episode_step
+
                     # Se l'auto va al contrario per errore (marcia indietro drastica oltre il traguardo)
                     elif diff > (TOTAL_WAYPOINTS // 2):
                         laps_completed[i] -= 1
@@ -347,15 +364,49 @@ def main():
             rewards = np.array(rewards, dtype=np.float32)
             dones = np.array(dones, dtype=np.float32)
 
+            # Accumula la reward del frame corrente
+            episode_cumulative_rewards[0] += float(rewards[0])
+            episode_cumulative_rewards[1] += float(rewards[1])
+
+            speed_kmh_0 = next_states[0][16] * MAX_VELOCITY_KMH
+            speed_kmh_1 = next_states[1][16] * MAX_VELOCITY_KMH
+
+            # Calcolo distanze in metri e progresso % per il logger
+            current_distances_m = [meters_agent_0, meters_agent_1]
+            current_progress_pcts = [
+                (meters_agent_0 / TRACK_LENGTH_METERS) * 100.0,
+                (meters_agent_1 / TRACK_LENGTH_METERS) * 100.0
+            ]
+
             # Inviamo i dati allo step recorder
             logger.record_step(
-                speeds=[speed_0, speed_1],
+                speeds=[speed_kmh_0, speed_kmh_1],
                 angles=[angle_0, angle_1],
                 distance_between_agents=distance_between_agents,
                 real_physical_distance=real_physical_distance,
                 is_leading_0=is_leading_0,
-                rewards=rewards.tolist()
+                rewards=rewards.tolist(),
+                current_distances_m=current_distances_m,
+                current_progress_pcts=current_progress_pcts
             )
+
+            # Controlliamo se è il momento di salvare un checkpoint automatico
+            if logger.global_step >= last_saved_checkpoint + SAVE_INTERVAL_STEPS:
+                end_step = logger.global_step
+
+                # Definiamo il percorso della cartella dinamica: pth-history/checkpoint-{end_step}_steps
+                history_dir = os.path.join("pth-history", f"checkpoint-{end_step}_steps")
+                os.makedirs(history_dir, exist_ok=True)
+
+                # Salvataggio dei file all'interno della cartella specifica
+                actor_history_path = os.path.join(history_dir, "actor.pth")
+                critic_history_path = os.path.join(history_dir, "critic.pth")
+
+                torch.save(actor_net.state_dict(), actor_history_path)
+                torch.save(critic_net.state_dict(), critic_history_path)
+
+                print(f"💾 Checkpoint automatico salvato in: {history_dir} (Global Step: {end_step})")
+                last_saved_checkpoint = end_step
 
             # 6. Salvataggio nel buffer
             buffer.store(
@@ -422,6 +473,8 @@ def main():
                 prev_steer_agents = [0.0] * NUM_AGENTS
                 prev_closest_idx = [None] * NUM_AGENTS
                 laps_completed = [0] * NUM_AGENTS
+                lap_start_steps = [0] * NUM_AGENTS
+                episode_cumulative_rewards = [0.0, 0.0]
                 still_counter = [0] * NUM_AGENTS
                 overtakes_0 = 0
                 overtakes_1 = 0

@@ -4,7 +4,7 @@ from config.config import *
 def connect_to_carla():
     """Inizializza la connessione con il simulatore CARLA."""
     client = carla.Client('localhost', 2000)
-    client.set_timeout(10.0)
+    client.set_timeout(60.0)
     world = client.get_world()
 
     # Configurazione modalità sincrona

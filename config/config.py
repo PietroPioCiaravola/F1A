@@ -11,6 +11,7 @@ MAX_VELOCITY = 70.00  # Velocità massima di riferimento (m/s) per la normalizza
 MAX_VELOCITY_KMH = MAX_VELOCITY * 3.6  # Velocità massima in km/h
 STILL_THRESHOLD_STEPS = 300  # Numero di step consecutivi a velocità quasi nulla prima del reset per "still", 300 X 0.05 = 15 secondi
 MAX_STEPS_PER_EPISODE = 2000  # Limite massimo di step prima del reset forzato dell'ambiente
+SAVE_INTERVAL_STEPS = 50000 # Salva i checkpoint ogni SAVE_INTERVAL_STEPS step globali per evitare di perdere progressi in caso di crash o interruzione + Permettere di riprendere l'addestramento da un punto intermedio
 COOLDOWN_OVERTAKE_STEPS = 100  # Numero di step di cooldown dopo un sorpasso prima di poter effettuare un nuovo sorpasso (100 X 0.05 = 5 secondi)
 OVERTAKE_THRESHOLD_METERS = 5.5 # Distanza minima tra due agenti per considerare un sorpasso valido (in metri).
 

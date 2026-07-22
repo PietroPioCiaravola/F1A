@@ -29,13 +29,6 @@ class Actor(nn.Module):
         std = torch.exp(clamped_log_std)
         return mean, std
 
-    def forward(self, state):
-        x = self.net(state)
-        mean = torch.tanh(self.mean(x))
-        std = torch.exp(self.log_std)
-        return mean, std
-
-
 class Critic(nn.Module):
     """
     Critic centralizzato (MAPPO).
